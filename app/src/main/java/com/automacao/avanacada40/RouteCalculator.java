@@ -7,9 +7,14 @@ import android.util.Log;
 import android.widget.Toast;
 
 import com.google.android.gms.maps.GoogleMap;
+import com.google.android.gms.maps.model.BitmapDescriptorFactory;
 import com.google.android.gms.maps.model.CircleOptions;
 import com.google.android.gms.maps.model.LatLng;
+import com.google.android.gms.maps.model.LatLngBounds;
+import com.google.android.gms.maps.model.MarkerOptions;
 import com.google.android.gms.maps.model.PolylineOptions;
+import com.google.android.gms.maps.CameraUpdateFactory;
+import com.google.android.gms.maps.model.CameraPosition;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -101,17 +106,12 @@ public class RouteCalculator {
             }
 
             private float getDistanceFromText(String text) {
-                // Remove caracteres não numéricos e mantém o ponto decimal
                 String numericText = text.replaceAll("[^\\d.]", "");
-                // Converte a string para float
                 return Float.parseFloat(numericText);
             }
 
-
             private long getDurationFromText(String text) {
                 long totalMinutes = 0;
-
-                // Procura por horas e minutos no texto
                 String[] parts = text.split(" ");
                 for (int i = 0; i < parts.length; i++) {
                     if (parts[i].endsWith("hour") || parts[i].endsWith("hours")) {
@@ -120,10 +120,8 @@ public class RouteCalculator {
                         totalMinutes += Long.parseLong(parts[i - 1]);
                     }
                 }
-
                 return totalMinutes;
             }
-
 
             private void decodePolylines(String encodedPoints, ArrayList<LatLng> lstLatLng) {
                 int index = 0;
@@ -173,12 +171,36 @@ public class RouteCalculator {
                             .setTitle("Escolha uma rota")
                             .setItems(routeOptions, (dialog, which) -> {
                                 map.clear();  // Limpa o mapa antes de desenhar a nova rota
+
+                                // Adiciona o marcador de partida
+                                map.addMarker(new MarkerOptions()
+                                        .position(startLatLng)
+                                        .title("Partida")
+                                        .icon(BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_BLUE)));
+
+                                // Adiciona o marcador de destino
+                                map.addMarker(new MarkerOptions()
+                                        .position(destinationLatLng)
+                                        .title("Destino")
+                                        .icon(BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_RED)));
+
+                                // Desenha a rota selecionada
                                 PolylineOptions polylineOptions = new PolylineOptions();
                                 polylineOptions.color(colors[which % colors.length]);
                                 for (LatLng latLng : routes.get(which)) {
                                     polylineOptions.add(latLng);
                                 }
                                 map.addPolyline(polylineOptions);
+
+                                // Ajusta a câmera para mostrar a rota completa
+                                LatLngBounds.Builder builder = new LatLngBounds.Builder();
+                                for (LatLng latLng : routes.get(which)) {
+                                    builder.include(latLng);
+                                }
+                                builder.include(startLatLng);
+                                builder.include(destinationLatLng);
+                                LatLngBounds bounds = builder.build();
+                                map.animateCamera(CameraUpdateFactory.newLatLngBounds(bounds, 100));
 
                                 String distanceMessage = String.format(Locale.getDefault(), "Distância total: %.2f km", routeDistances.get(which));
                                 String timeMessage = String.format(Locale.getDefault(), "Tempo total: %d minutos", routeTimes.get(which));
