@@ -7,24 +7,20 @@ import android.util.Log;
 import android.widget.Toast;
 
 import com.google.android.gms.maps.GoogleMap;
-import com.google.android.gms.maps.model.BitmapDescriptorFactory;
 import com.google.android.gms.maps.model.CircleOptions;
 import com.google.android.gms.maps.model.LatLng;
-import com.google.android.gms.maps.model.MarkerOptions;
 import com.google.android.gms.maps.model.PolylineOptions;
 
-import org.w3c.dom.Document;
-import org.w3c.dom.Element;
-import org.w3c.dom.Node;
-import org.w3c.dom.NodeList;
+import org.json.JSONArray;
+import org.json.JSONObject;
 
 import java.io.InputStream;
+import java.net.HttpURLConnection;
 import java.net.URL;
 import java.util.ArrayList;
+import java.util.List;
 import java.util.Locale;
-
-import javax.xml.parsers.DocumentBuilder;
-import javax.xml.parsers.DocumentBuilderFactory;
+import java.util.Scanner;
 
 public class RouteCalculator {
 
@@ -34,8 +30,6 @@ public class RouteCalculator {
     private LatLng startLatLng;
     private LatLng destinationLatLng;
     private Context context;
-    private float totalDistance;
-    private long totalTime;
 
     public RouteCalculator(GoogleMap map, LatLng startLatLng, LatLng destinationLatLng, Context context) {
         this.map = map;
@@ -48,70 +42,88 @@ public class RouteCalculator {
         AsyncTask<Void, Integer, Boolean> task = new AsyncTask<Void, Integer, Boolean>() {
             private static final String TOAST_ERR_MSG = "Unable to calculate route";
 
-            private final ArrayList<ArrayList<LatLng>> routes = new ArrayList<>();
-            private final ArrayList<Float> routeDistances = new ArrayList<>();
-            private final ArrayList<Long> routeTimes = new ArrayList<>();
+            private final List<ArrayList<LatLng>> routes = new ArrayList<>();
+            private final List<Float> routeDistances = new ArrayList<>();
+            private final List<Long> routeTimes = new ArrayList<>();
 
             @Override
             protected Boolean doInBackground(Void... params) {
+                HttpURLConnection urlConnection = null;
                 try {
                     String apiKey = "AIzaSyBCyVwhUeBZrcFLX8-PqsjYzvYMaVQvS_4";
-                    String url = "https://maps.googleapis.com/maps/api/directions/xml?origin=" +
+                    String urlStr = "https://maps.googleapis.com/maps/api/directions/json?origin=" +
                             startLatLng.latitude + "," + startLatLng.longitude +
                             "&destination=" + destinationLatLng.latitude + "," + destinationLatLng.longitude +
-                            "&sensor=false&language=pt" +
-                            "&mode=driving" +
                             "&alternatives=true" +
                             "&key=" + apiKey;
 
-                    Log.d(TAG, "Request URL: " + url);
+                    URL url = new URL(urlStr);
+                    urlConnection = (HttpURLConnection) url.openConnection();
+                    InputStream inputStream = urlConnection.getInputStream();
+                    String response = new Scanner(inputStream).useDelimiter("\\A").next();
 
-                    InputStream stream = new URL(url).openStream();
-                    DocumentBuilderFactory documentBuilderFactory = DocumentBuilderFactory.newInstance();
-                    documentBuilderFactory.setIgnoringComments(true);
-                    DocumentBuilder documentBuilder = documentBuilderFactory.newDocumentBuilder();
-                    Document document = documentBuilder.parse(stream);
-                    document.getDocumentElement().normalize();
-
-                    String status = document.getElementsByTagName("status").item(0).getTextContent();
-                    Log.d(TAG, "API response status: " + status);
+                    JSONObject jsonResponse = new JSONObject(response);
+                    String status = jsonResponse.getString("status");
                     if (!"OK".equals(status)) {
                         return false;
                     }
 
-                    NodeList routeNodes = document.getElementsByTagName("route");
-                    Log.d(TAG, "Number of routes: " + routeNodes.getLength());
-                    for (int r = 0; r < routeNodes.getLength(); r++) {
-                        Element routeElement = (Element) routeNodes.item(r);
-                        NodeList legNodes = routeElement.getElementsByTagName("leg");
-                        Element legElement = (Element) legNodes.item(0);
+                    JSONArray routesArray = jsonResponse.getJSONArray("routes");
+                    Log.d(TAG, "Number of routes: " + routesArray.length());
+                    for (int r = 0; r < routesArray.length(); r++) {
+                        JSONObject route = routesArray.getJSONObject(r);
+                        JSONObject overviewPolyline = route.getJSONObject("overview_polyline");
+                        String encodedPoints = overviewPolyline.getString("points");
 
                         ArrayList<LatLng> lstLatLng = new ArrayList<>();
-                        NodeList stepNodes = legElement.getElementsByTagName("step");
-
-                        for (int i = 0; i < stepNodes.getLength(); i++) {
-                            Node nodeStep = stepNodes.item(i);
-                            if (nodeStep.getNodeType() == Node.ELEMENT_NODE) {
-                                Element elementStep = (Element) nodeStep;
-                                decodePolylines(elementStep.getElementsByTagName("points").item(0).getTextContent(), lstLatLng);
-                            }
-                        }
-
+                        decodePolylines(encodedPoints, lstLatLng);
                         routes.add(lstLatLng);
 
-                        String distanceText = legElement.getElementsByTagName("distance").item(0).getTextContent();
-                        String durationText = legElement.getElementsByTagName("duration").item(0).getTextContent();
+                        JSONObject leg = route.getJSONArray("legs").getJSONObject(0);
+                        String distanceText = leg.getJSONObject("distance").getString("text");
+                        String durationText = leg.getJSONObject("duration").getString("text");
 
-                        routeDistances.add(Float.parseFloat(distanceText.replaceAll("\\D+", "")) / 1000);
-                        routeTimes.add(Long.parseLong(durationText.replaceAll("\\D+", "")));
+                        Log.e(TAG, "Distancia da rota: " + distanceText);
+                        Log.e(TAG, "Tempo da rota: " + durationText);
+                        routeDistances.add(getDistanceFromText(distanceText)); // Convert to km
+                        routeTimes.add(getDurationFromText(durationText)); // Convert to MIN
                     }
 
                     return true;
                 } catch (Exception e) {
                     Log.e(TAG, "Error calculating route", e);
                     return false;
+                } finally {
+                    if (urlConnection != null) {
+                        urlConnection.disconnect();
+                    }
                 }
             }
+
+            private float getDistanceFromText(String text) {
+                // Remove caracteres não numéricos e mantém o ponto decimal
+                String numericText = text.replaceAll("[^\\d.]", "");
+                // Converte a string para float
+                return Float.parseFloat(numericText);
+            }
+
+
+            private long getDurationFromText(String text) {
+                long totalMinutes = 0;
+
+                // Procura por horas e minutos no texto
+                String[] parts = text.split(" ");
+                for (int i = 0; i < parts.length; i++) {
+                    if (parts[i].endsWith("hour") || parts[i].endsWith("hours")) {
+                        totalMinutes += Long.parseLong(parts[i - 1]) * 60;
+                    } else if (parts[i].endsWith("min") || parts[i].endsWith("mins")) {
+                        totalMinutes += Long.parseLong(parts[i - 1]);
+                    }
+                }
+
+                return totalMinutes;
+            }
+
 
             private void decodePolylines(String encodedPoints, ArrayList<LatLng> lstLatLng) {
                 int index = 0;
@@ -148,71 +160,105 @@ public class RouteCalculator {
                 if (!result) {
                     Toast.makeText(context, TOAST_ERR_MSG, Toast.LENGTH_SHORT).show();
                 } else {
-                    map.clear();  // Limpa o mapa antes de desenhar as novas rotas
-
-                    // Adiciona o marcador para o ponto de partida
-                    MarkerOptions startMarker = new MarkerOptions()
-                            .position(startLatLng)
-                            .title("Ponto de Partida")
-                            .icon(BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_GREEN));
-                    map.addMarker(startMarker);
-
-                    // Adiciona o marcador para o ponto de chegada
-                    MarkerOptions endMarker = new MarkerOptions()
-                            .position(destinationLatLng)
-                            .title("Ponto de Chegada")
-                            .icon(BitmapDescriptorFactory.defaultMarker(BitmapDescriptorFactory.HUE_RED));
-                    map.addMarker(endMarker);
-
                     int[] colors = {Color.BLUE, Color.GREEN, Color.RED};
+
+                    String[] routeOptions = new String[routes.size()];
                     for (int i = 0; i < routes.size(); i++) {
-                        PolylineOptions polylineOptions = new PolylineOptions();
-                        polylineOptions.color(colors[i % colors.length]);
-                        for (LatLng latLng : routes.get(i)) {
-                            polylineOptions.add(latLng);
-                        }
-                        map.addPolyline(polylineOptions);
-
-                        String distanceMessage = String.format(Locale.getDefault(), "Distância total: %.2f km", routeDistances.get(i));
-                        String timeMessage = String.format(Locale.getDefault(), "Tempo total: %d segundos", routeTimes.get(i));
-                        String combinedMessage = distanceMessage + "\n" + timeMessage;
-
-                        Toast.makeText(context, combinedMessage, Toast.LENGTH_SHORT).show();
-
-                        addGeofences(routes.get(i));  // Adiciona geocercas para cada rota
+                        String distanceText = String.format(Locale.getDefault(), "%.2f km", routeDistances.get(i));
+                        String durationText = String.format(Locale.getDefault(), "%d min", routeTimes.get(i));
+                        routeOptions[i] = "Rota " + (i + 1) + ": " + distanceText + ", Tempo: " + durationText;
                     }
+
+                    new android.app.AlertDialog.Builder(context)
+                            .setTitle("Escolha uma rota")
+                            .setItems(routeOptions, (dialog, which) -> {
+                                map.clear();  // Limpa o mapa antes de desenhar a nova rota
+                                PolylineOptions polylineOptions = new PolylineOptions();
+                                polylineOptions.color(colors[which % colors.length]);
+                                for (LatLng latLng : routes.get(which)) {
+                                    polylineOptions.add(latLng);
+                                }
+                                map.addPolyline(polylineOptions);
+
+                                String distanceMessage = String.format(Locale.getDefault(), "Distância total: %.2f km", routeDistances.get(which));
+                                String timeMessage = String.format(Locale.getDefault(), "Tempo total: %d minutos", routeTimes.get(which));
+                                String combinedMessage = distanceMessage + "\n" + timeMessage;
+
+                                Toast.makeText(context, combinedMessage, Toast.LENGTH_SHORT).show();
+                                addGeofences(routes.get(which));
+                            })
+                            .show();
                 }
+            }
+
+            private void addGeofences(List<LatLng> route) {
+                int geofenceCount = 6;
+                float[] intervals = new float[geofenceCount - 1];
+                float totalDistance = 0;
+                LatLng prevLatLng = route.get(0);
+
+                for (int i = 1; i < route.size(); i++) {
+                    LatLng currentLatLng = route.get(i);
+                    float[] results = new float[1];
+                    android.location.Location.distanceBetween(
+                            prevLatLng.latitude, prevLatLng.longitude,
+                            currentLatLng.latitude, currentLatLng.longitude,
+                            results);
+                    totalDistance += results[0];
+                    prevLatLng = currentLatLng;
+                }
+
+                float interval = totalDistance / (geofenceCount - 1);
+
+                for (int i = 0; i < geofenceCount - 1; i++) {
+                    intervals[i] = interval * (i + 1);
+                }
+
+                intervals[geofenceCount - 2] = totalDistance;
+
+                prevLatLng = route.get(0);
+                int intervalIndex = 0;
+                float accumulatedDistance = 0;
+
+                for (int i = 1; i < route.size(); i++) {
+                    LatLng currentLatLng = route.get(i);
+                    float[] results = new float[1];
+                    android.location.Location.distanceBetween(
+                            prevLatLng.latitude, prevLatLng.longitude,
+                            currentLatLng.latitude, currentLatLng.longitude,
+                            results);
+                    accumulatedDistance += results[0];
+                    if (accumulatedDistance >= intervals[intervalIndex]) {
+                        CircleOptions circleOptions = new CircleOptions()
+                                .center(currentLatLng)
+                                .radius(30)
+                                .strokeColor(Color.MAGENTA)
+                                .fillColor(Color.argb(64, 128, 0, 128)); // cor roxa com transparência
+                        map.addCircle(circleOptions);
+
+                        intervalIndex++;
+                        if (intervalIndex >= intervals.length) {
+                            break;
+                        }
+                    }
+
+                    prevLatLng = currentLatLng;
+                }
+
+                // Adiciona geocercas para o ponto de partida e destino
+                map.addCircle(new CircleOptions()
+                        .center(route.get(0))
+                        .radius(30)
+                        .strokeColor(Color.MAGENTA)
+                        .fillColor(Color.argb(64, 128, 0, 128)));
+                map.addCircle(new CircleOptions()
+                        .center(route.get(route.size() - 1))
+                        .radius(30)
+                        .strokeColor(Color.MAGENTA)
+                        .fillColor(Color.argb(64, 128, 0, 128)));
             }
         };
 
         task.execute();
     }
-
-    private void addGeofences(ArrayList<LatLng> route) {
-        int numGeofences = 6;
-        int routeSize = route.size();
-
-        if (routeSize < 2) {
-            // Se há menos de 2 pontos na rota, não podemos adicionar geocercas
-            return;
-        }
-
-        // Adiciona geocercas igualmente espaçadas
-        for (int i = 0; i < numGeofences; i++) {
-            // Calcula o índice do ponto da rota para a geocerca
-            int index = (routeSize - 1) * i / (numGeofences - 1);
-            // Garante que o índice não está fora dos limites
-            if (index >= routeSize) {
-                index = routeSize - 1;
-            }
-            LatLng point = route.get(index);
-            CircleOptions circleOptions = new CircleOptions()
-                    .center(point)
-                    .radius(30) // raio de 30 metros
-                    .strokeColor(Color.rgb(128, 0, 128)) // cor roxa para a borda
-                    .fillColor(Color.argb(100, 128, 0, 128));
-            map.addCircle(circleOptions);
-        }
-    }
-
 }
